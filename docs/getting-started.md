@@ -42,6 +42,10 @@ String answer = chatClient.prompt()
 For a persistent database (PostgreSQL, MySQL) or other setups, see
 [Choose a setup](#choose-a-setup) below.
 
+If your application uses tool calls or other large transient payloads, configure
+`SessionMessageFilter` on the advisor to keep those messages out of session storage. See
+[Message Filtering](session-management/message-filtering.md) for the full API.
+
 ---
 
 ## Add the BOM (recommended)
@@ -168,6 +172,10 @@ Import the BOM so all module versions stay in sync:
 `SessionMemoryAdvisor` is the recommended way to use sessions with a `ChatClient`. It
 automatically loads history before each request, appends the user and assistant messages
 after each response, and runs compaction when a trigger fires.
+
+To customize what gets persisted, add `messageFilter(...)` before `build()`. The default
+filter already skips empty assistant frames, and you can compose extra rules with
+the filter's `and(...)` combinator.
 
 ```java
 @Bean

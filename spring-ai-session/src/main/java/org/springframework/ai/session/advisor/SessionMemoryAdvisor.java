@@ -35,19 +35,18 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.ai.chat.client.advisor.api.MemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionMessageFilter;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionStrategy;
 import org.springframework.ai.session.compaction.CompactionTrigger;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
-import org.springframework.util.CollectionUtils;
 
 /**
  * A {@link BaseAdvisor} that manages conversation history using the
@@ -57,9 +56,10 @@ import org.springframework.util.CollectionUtils;
  * On each interaction:
  * <ol>
  * <li>Retrieves the session's event history and prepends it to the prompt messages.</li>
- * <li>Appends the current user message to the session.</li>
- * <li>After the model responds, appends the assistant message to the session; empty
- * assistant messages (blank text, no tool calls, and no media) are skipped.</li>
+ * <li>Appends the current user or tool-response message to the session when it passes the
+ * configured {@link SessionMessageFilter}.</li>
+ * <li>After the model responds, appends assistant messages that pass the configured
+ * {@link SessionMessageFilter}.</li>
  * <li>Optionally triggers context compaction if the configured trigger fires.</li>
  * </ol>
  *
@@ -109,18 +109,21 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final EventFilter eventFilter;
 
+	private final SessionMessageFilter messageFilter;
+
 	@Nullable private final CompactionTrigger compactionTrigger;
 
 	@Nullable private final CompactionStrategy compactionStrategy;
 
 	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId, int order, Scheduler scheduler,
-			EventFilter eventFilter, @Nullable CompactionTrigger compactionTrigger,
+			EventFilter eventFilter, SessionMessageFilter messageFilter, @Nullable CompactionTrigger compactionTrigger,
 			@Nullable CompactionStrategy compactionStrategy) {
 		this.sessionService = sessionService;
 		this.defaultUserId = defaultUserId;
 		this.order = order;
 		this.scheduler = scheduler;
 		this.eventFilter = eventFilter;
+		this.messageFilter = messageFilter;
 		this.compactionTrigger = compactionTrigger;
 		this.compactionStrategy = compactionStrategy;
 	}
@@ -196,9 +199,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			combined.addAll(0, systemMessages);
 		}
 
-		// 4. Append the current user message to the session
+		// 4. Append the current user or tool-response message to the session
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
-		if (userMessage != null) {
+		if (userMessage != null && shouldPersist(userMessage, request.context(), sessionId)) {
 			this.sessionService.appendMessage(sessionId, userMessage);
 		}
 
@@ -210,13 +213,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		String sessionId = getSessionId(response.context());
 
 		// 1. Append the assistant message(s) produced by the model. Excludes messages
-		// that carry no content — blank text, no tool calls, and no media.
+		// that do not pass the configured message filter.
 		if (response.chatResponse() != null) {
+			Map<String, @Nullable Object> context = response.context();
 			response.chatResponse()
 				.getResults()
 				.stream()
 				.map(g -> (Message) g.getOutput())
-				.filter(msg -> shouldPersist(msg, sessionId))
+				.filter(msg -> shouldPersist(msg, context, sessionId))
 				.forEach(msg -> this.sessionService.appendMessage(sessionId, msg));
 		}
 
@@ -258,27 +262,13 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return (value instanceof String s && !s.isBlank()) ? s : this.defaultUserId;
 	}
 
-	/**
-	 * Returns {@code true} if the message should be persisted to the session. Empty
-	 * assistant messages — those carrying neither text, tool calls, nor media — are
-	 * skipped (and logged) so they are not replayed on later requests.
-	 */
-	private static boolean shouldPersist(Message message, String sessionId) {
-		if (isEmptyAssistantMessage(message)) {
-			logger.debug("Skipping empty assistant message for session [{}] — no text, tool calls, or media",
+	private boolean shouldPersist(Message message, Map<String, @Nullable Object> context, String sessionId) {
+		boolean keep = this.messageFilter.matches(message, context);
+		if (!keep) {
+			logger.debug("Skipping {} message for session [{}] due to message filter", message.getMessageType(),
 					sessionId);
-			return false;
 		}
-		return true;
-	}
-
-	/**
-	 * Returns {@code true} for an {@link AssistantMessage} that carries neither text,
-	 * tool calls, nor media content.
-	 */
-	private static boolean isEmptyAssistantMessage(Message message) {
-		return message instanceof AssistantMessage am && (am.getText() == null || am.getText().isBlank())
-				&& !am.hasToolCalls() && CollectionUtils.isEmpty(am.getMedia());
+		return keep;
 	}
 
 	public static Builder builder(SessionService sessionService) {
@@ -299,6 +289,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
 
 		private EventFilter eventFilter = EventFilter.all();
+
+		private SessionMessageFilter messageFilter = SessionMessageFilter.excludeEmptyAssistantMessages();
 
 		@Nullable private CompactionTrigger compactionTrigger;
 
@@ -341,6 +333,27 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			return this;
 		}
 
+		/**
+		 * Filter applied when appending messages to session memory. Defaults to
+		 * {@link SessionMessageFilter#excludeEmptyAssistantMessages()} so the Bedrock-safe
+		 * empty assistant suppression from #19 remains in place.
+		 * <p>
+		 * Compose filters with {@link SessionMessageFilter#and(SessionMessageFilter)} when
+		 * you want to preserve the default behavior and add your own rules, for example to
+		 * skip tool responses:
+		 * <pre>{@code
+		 * SessionMemoryAdvisor.builder(sessionService)
+		 *     .messageFilter(SessionMessageFilter.excludeEmptyAssistantMessages()
+		 *         .and(SessionMessageFilter.excludeToolMessages()))
+		 *     .build();
+		 * }</pre>
+		 */
+		public Builder messageFilter(SessionMessageFilter messageFilter) {
+			Assert.notNull(messageFilter, "messageFilter must not be null");
+			this.messageFilter = messageFilter;
+			return this;
+		}
+
 		public Builder compactionTrigger(CompactionTrigger trigger) {
 			this.compactionTrigger = trigger;
 			return this;
@@ -357,7 +370,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 						"compactionTrigger and compactionStrategy must be set together — set both or neither");
 			}
 			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order, this.scheduler,
-					this.eventFilter, this.compactionTrigger, this.compactionStrategy);
+					this.eventFilter, this.messageFilter, this.compactionTrigger, this.compactionStrategy);
 		}
 
 	}

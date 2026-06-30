@@ -22,11 +22,12 @@ On every request the advisor:
    advisor-level filter — request-level fields win over advisor defaults.
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
    preserving their relative order.
-4. Appends the current user message to the session.
-5. After the model responds, appends the assistant message. Empty assistant messages
-   (blank text, no tool calls, and no media) are skipped — some models (e.g. Bedrock
-   Converse) emit an empty `end_turn` frame after tool use that would otherwise be
-   replayed and rejected on the next request.
+4. Appends the current user or tool-response message to the session when it passes the
+   configured `SessionMessageFilter`.
+5. After the model responds, appends assistant messages that pass the configured
+   `SessionMessageFilter`. The default filter skips empty assistant messages (blank text,
+   no tool calls, and no media) so Bedrock Converse `end_turn` frames do not get replayed
+   on the next request.
 6. If a trigger fires, runs compaction **synchronously** before returning — the full turn
    (user + assistant) is already written at this point, so there is no race between
    compaction and message appending.
@@ -145,6 +146,24 @@ String response = client.prompt()
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; `excludeSynthetic` is OR-ed so either
 side can opt in. A `null` value for `EVENT_FILTER_CONTEXT_KEY` is ignored.
+
+---
+
+## Persisting selected messages
+
+Use `messageFilter(...)` when you want to drop large tool responses or other transient
+messages before they are written to session memory. The default builder filter is
+`SessionMessageFilter.excludeEmptyAssistantMessages()`.
+
+```java
+SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    .messageFilter(SessionMessageFilter.excludeEmptyAssistantMessages()
+        .and(SessionMessageFilter.excludeToolMessages()))
+    .build();
+```
+
+If you replace the default filter, compose it back in whenever you still want the
+Bedrock-safe empty-assistant suppression from issue #19.
 
 ---
 

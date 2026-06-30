@@ -42,6 +42,7 @@ nav:
   - Session Management:
       - Session Concepts: session-management/concepts.md
       - Event Filtering: session-management/event-filtering.md
+      - Message Filtering: session-management/message-filtering.md
       - Context Compaction: session-management/compaction.md
       - ChatClient Integration: session-management/chat-client.md
       - Multi-Agent Branch Isolation: session-management/multi-agent.md

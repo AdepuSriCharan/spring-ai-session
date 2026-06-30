@@ -29,6 +29,7 @@ import org.springframework.ai.chat.client.advisor.api.AdvisorChain;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -38,6 +39,7 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionMessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
 import org.springframework.ai.session.SessionRepository;
@@ -469,6 +471,42 @@ class SessionMemoryAdvisorIT {
 		AssistantMessage nullText = AssistantMessage.builder().build();
 		ChatClientResponse response = buildResponseFromMessages(this.sessionId, nullText);
 		this.advisor.after(response, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
+	@Test
+	void beforeSkipsToolResponseMessageWhenFilterRejectsToolMessages() {
+		SessionMemoryAdvisor filteredAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter(SessionMessageFilter.excludeToolMessages())
+			.build();
+
+		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather",
+					"{\"location\":\"Paris\",\"forecast\":\"sunny\",\"payload\":\"very-large-json\"}")))
+			.build();
+		Prompt prompt = new Prompt(List.of(new UserMessage("What is the weather?"), toolResponse));
+		ChatClientRequest request = ChatClientRequest.builder()
+			.prompt(prompt)
+			.context(Map.of(SessionMemoryAdvisor.SESSION_ID_CONTEXT_KEY, this.sessionId))
+			.build();
+
+		filteredAdvisor.before(request, mock(AdvisorChain.class));
+
+		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
+	}
+
+	@Test
+	void afterSkipsAssistantMessageWhenContentFilterRejectsIt() {
+		SessionMemoryAdvisor filteredAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.messageFilter((message, context) -> {
+				String text = message.getText();
+				return text == null || !text.contains("DROP");
+			})
+			.build();
+
+		ChatClientResponse response = buildResponse(this.sessionId, "DROP this assistant payload");
+		filteredAdvisor.after(response, mock(AdvisorChain.class));
 
 		assertThat(this.sessionService.getEvents(this.sessionId)).isEmpty();
 	}
