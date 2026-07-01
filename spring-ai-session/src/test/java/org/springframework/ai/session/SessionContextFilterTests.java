@@ -30,15 +30,15 @@ import org.springframework.ai.chat.messages.UserMessage;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit tests for {@link SessionMessageFilter}.
+ * Unit tests for {@link SessionContextFilter}.
  *
  * @author Christian Tzolov
  */
-class SessionMessageFilterTests {
+class SessionContextFilterTests {
 
 	@Test
 	void onlyUserAndAssistantRejectsToolResponses() {
-		SessionMessageFilter filter = SessionMessageFilter.onlyUserAndAssistant();
+		SessionContextFilter filter = SessionContextFilter.onlyUserAndAssistant();
 		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
 			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
 			.build();
@@ -50,7 +50,7 @@ class SessionMessageFilterTests {
 
 	@Test
 	void includeMessageTypesKeepsOnlyTheSpecifiedTypes() {
-		SessionMessageFilter filter = SessionMessageFilter.includeMessageTypes(Set.of(MessageType.USER));
+		SessionContextFilter filter = SessionContextFilter.includeMessageTypes(Set.of(MessageType.USER));
 		ToolResponseMessage toolResponse = ToolResponseMessage.builder()
 			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather", "{\"temp\":\"22C\"}")))
 			.build();
@@ -62,17 +62,17 @@ class SessionMessageFilterTests {
 
 	@Test
 	void contentAndContextAwareLambdaCanFilterMessages() {
-		SessionMessageFilter filter = (message, context) -> "persist".equals(context.get("mode"))
+		SessionContextFilter filter = (message, context) -> "prompt".equals(context.get("mode"))
 				&& (message.getText() == null || !message.getText().contains("DROP"));
 
-		assertThat(filter.matches(new UserMessage("keep this"), Map.of("mode", "persist"))).isTrue();
-		assertThat(filter.matches(new UserMessage("DROP this"), Map.of("mode", "persist"))).isFalse();
+		assertThat(filter.matches(new UserMessage("keep this"), Map.of("mode", "prompt"))).isTrue();
+		assertThat(filter.matches(new UserMessage("DROP this"), Map.of("mode", "prompt"))).isFalse();
 		assertThat(filter.matches(new UserMessage("keep this"), Map.of("mode", "skip"))).isFalse();
 	}
 
 	@Test
 	void excludeEmptyAssistantMessagesRejectsBlankAssistantMessages() {
-		SessionMessageFilter filter = SessionMessageFilter.excludeEmptyAssistantMessages();
+		SessionContextFilter filter = SessionContextFilter.excludeEmptyAssistantMessages();
 		AssistantMessage emptyAssistant = new AssistantMessage("");
 		AssistantMessage withToolCalls = AssistantMessage.builder()
 			.toolCalls(List.of(new AssistantMessage.ToolCall("call-1", "function", "get_weather", "{}")))
@@ -84,9 +84,9 @@ class SessionMessageFilterTests {
 
 	@Test
 	void combinatorsComposeAsExpected() {
-		SessionMessageFilter userOnly = SessionMessageFilter.includeMessageTypes(Set.of(MessageType.USER));
-		SessionMessageFilter assistantOnly = SessionMessageFilter.includeMessageTypes(Set.of(MessageType.ASSISTANT));
-		SessionMessageFilter userOrAssistant = userOnly.or(assistantOnly);
+		SessionContextFilter userOnly = SessionContextFilter.includeMessageTypes(Set.of(MessageType.USER));
+		SessionContextFilter assistantOnly = SessionContextFilter.includeMessageTypes(Set.of(MessageType.ASSISTANT));
+		SessionContextFilter userOrAssistant = userOnly.or(assistantOnly);
 
 		assertThat(userOrAssistant.matches(new UserMessage("hello"), Map.of())).isTrue();
 		assertThat(userOrAssistant.matches(new AssistantMessage("hello"), Map.of())).isTrue();

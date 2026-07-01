@@ -14,6 +14,7 @@ Most AI frameworks store conversation history as a flat list of messages. That w
 
 - **Structured events** — every message is a `SessionEvent` with identity, timestamp, session ownership, and an optional branch label for multi-agent hierarchies
 - **Turn-aware compaction** — configurable triggers fire when history grows too large; pluggable strategies decide what to keep, always respecting turn boundaries
+- **Configurable read-side context filtering** — keep stored tool payloads or other transient messages out of the prompt when you do not want to replay them
 - **Configurable write-side message filtering** — skip large tool payloads or other transient messages before they are persisted to session memory
 - **Persistent repositories** — a clean SPI (`SessionRepository`) makes it trivial to swap the in-memory store for JDBC, Redis, or any other backend
 
@@ -111,6 +112,7 @@ Topics covered:
 - [Getting Started](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/getting-started/) — setup options (in-memory, JDBC auto-config, JDBC manual)
 - [Session Concepts](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/concepts/) — `Session`, `SessionEvent`, turns, and architecture
 - [Event Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/event-filtering/) — composable `EventFilter` API
+- [Context Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/context-filtering/) — read-side `SessionContextFilter` API
 - [Message Filtering](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/message-filtering/) — write-side `SessionMessageFilter` API
 - [Context Compaction](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/compaction/) — triggers, strategies, turn-boundary safety
 - [ChatClient Integration](https://spring-ai-community.github.io/spring-ai-session/latest-snapshot/session-management/chat-client/) — `SessionMemoryAdvisor` setup and options

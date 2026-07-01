@@ -39,6 +39,7 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.DefaultSessionService;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.SessionContextFilter;
 import org.springframework.ai.session.SessionMessageFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
@@ -294,6 +295,31 @@ class SessionMemoryAdvisorIT {
 		assertThat(texts).contains("root question");
 		assertThat(texts).contains("researcher output");
 		assertThat(texts).doesNotContain("writer output");
+	}
+
+	@Test
+	void contextFilterExcludesRetrievedToolMessagesButKeepsThemStored() {
+		this.sessionService.appendMessage(this.sessionId, new UserMessage("What is the weather?"));
+		this.sessionService.appendMessage(this.sessionId, ToolResponseMessage.builder()
+			.responses(List.of(new ToolResponseMessage.ToolResponse("call-1", "get_weather",
+					"{\"location\":\"Paris\",\"forecast\":\"sunny\",\"payload\":\"very-large-json\"}")))
+			.build());
+		this.sessionService.appendMessage(this.sessionId, new AssistantMessage("It is sunny in Paris."));
+
+		SessionMemoryAdvisor filteredAdvisor = SessionMemoryAdvisor.builder(this.sessionService)
+			.contextFilter(SessionContextFilter.excludeToolMessages())
+			.build();
+
+		ChatClientRequest request = buildRequest(this.sessionId, "Thanks");
+		ChatClientRequest modified = filteredAdvisor.before(request, mock(AdvisorChain.class));
+
+		List<String> texts = modified.prompt().getInstructions().stream().map(Message::getText).toList();
+		assertThat(texts).contains("What is the weather?", "It is sunny in Paris.", "Thanks");
+		assertThat(texts).doesNotContain("very-large-json");
+
+		List<SessionEvent> events = this.sessionService.getEvents(this.sessionId);
+		assertThat(events).hasSize(4);
+		assertThat(events.get(1).getMessageType().getValue()).isEqualTo("tool");
 	}
 
 	// --- Per-request EventFilter override ---

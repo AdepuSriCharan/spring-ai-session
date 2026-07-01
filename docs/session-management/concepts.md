@@ -189,10 +189,12 @@ operates on the event list as an explicit parameter.
 Compaction never deletes the events it removes from the active context window. Instead it
 marks them archived (`SessionEvent.isArchived()`) via `compactEvents`, leaving the full
 verbatim history in the log. The active context window — what `SessionMemoryAdvisor`
-injects into the prompt — is the `EventFilter.active()` view (`excludeArchived = true`),
-while Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately span the
-whole log, archived events included. This is what makes the MemGPT recall pattern work:
-the agent can surface any prior exchange even after it has been summarized out of context.
+injects into the prompt — starts with the `EventFilter.active()` view (`excludeArchived =
+true`) and can then be narrowed further by `SessionContextFilter` before prompt
+construction. Recall Storage searches (`EventFilter.keywordSearch(...)`) deliberately
+span the whole log, archived events included. This is what makes the MemGPT recall
+pattern work: the agent can surface any prior exchange even after it has been summarized
+out of context.
 
 **Optimistic concurrency**
 
@@ -272,6 +274,8 @@ org.springframework.ai.session          (Java package — unchanged from upstrea
 ├── SessionRepository.java              – persistence SPI
 ├── CreateSessionRequest.java           – builder for session creation parameters
 ├── EventFilter.java                    – composable criteria for event retrieval
+├── SessionContextFilter.java           – composable criteria for prompt injection
+├── SessionMessageFilter.java           – composable criteria for session persistence
 ├── DefaultSessionService.java          – default SessionService implementation
 ├── InMemorySessionRepository.java      – ConcurrentHashMap-backed repository
 │

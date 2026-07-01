@@ -46,6 +46,9 @@ If your application uses tool calls or other large transient payloads, configure
 `SessionMessageFilter` on the advisor to keep those messages out of session storage. See
 [Message Filtering](session-management/message-filtering.md) for the full API.
 
+If you want to keep those messages in storage but avoid replaying them into the prompt,
+configure `SessionContextFilter` instead. See [Context Filtering](session-management/context-filtering.md).
+
 ---
 
 ## Add the BOM (recommended)
@@ -176,6 +179,10 @@ after each response, and runs compaction when a trigger fires.
 To customize what gets persisted, add `messageFilter(...)` before `build()`. The default
 filter already skips empty assistant frames, and you can compose extra rules with
 the filter's `and(...)` combinator.
+
+To customize what gets injected back into the prompt, add `contextFilter(...)` before
+`build()`. The default filter keeps all retrieved history, and you can narrow it with the
+same style of composable predicates.
 
 ```java
 @Bean

@@ -7,6 +7,7 @@ message in `before()` and the model response in `after()`.
 Messages rejected by this filter never enter the session event log, so they will not be
 replayed into later turns. History retrieval is still governed by
 [`EventFilter`](event-filtering.md); the two abstractions are intentionally separate.
+For read-side prompt filtering, see [Context Filtering](context-filtering.md).
 
 ---
 
@@ -64,4 +65,3 @@ SessionMessageFilter filter = (message, context) -> {
 
 This makes it easy to keep large tool payloads, diagnostic traces, or other transient
 content out of session storage without changing the underlying repository SPI.
-

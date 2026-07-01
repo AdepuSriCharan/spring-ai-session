@@ -16,9 +16,11 @@ Spring AI Session solves this with three ideas working together:
 2. **Turn-aware compaction** — configurable triggers fire when the history grows too large,
    and pluggable strategies decide what to keep, always respecting turn boundaries so the
    model never sees an orphaned tool result or a half-finished exchange.
-3. **[Configurable write-side message filtering](session-management/message-filtering.md)** — skip large tool payloads or other
+3. **[Configurable read-side context filtering](session-management/context-filtering.md)** — trim retrieved history before it is
+   prepended to the prompt.
+4. **[Configurable write-side message filtering](session-management/message-filtering.md)** — skip large tool payloads or other
    transient messages before they are persisted to session memory.
-4. **Persistent repositories** — a clean SPI (`SessionRepository`) makes it trivial to
+5. **Persistent repositories** — a clean SPI (`SessionRepository`) makes it trivial to
    swap the default in-memory store for JDBC, Redis, or any other backend without
    changing application code.
 

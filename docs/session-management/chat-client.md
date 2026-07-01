@@ -17,9 +17,10 @@ On every request the advisor:
    the advisor validates that the requesting user owns the session and throws
    `IllegalStateException` on mismatch.
 2. Retrieves the session's event history (filtered by the configured `eventFilter`,
-   default `EventFilter.all()`) and **prepends** it to the prompt messages. If the
-   request context contains an `EVENT_FILTER_CONTEXT_KEY` value, it is merged with the
-   advisor-level filter — request-level fields win over advisor defaults.
+   default `EventFilter.all()`), applies the configured `SessionContextFilter`, and
+   **prepends** the remaining messages to the prompt. If the request context contains an
+   `EVENT_FILTER_CONTEXT_KEY` value, it is merged with the advisor-level filter —
+   request-level fields win over advisor defaults.
 3. Reorders all `SystemMessage` instances to the front of the combined message list,
    preserving their relative order.
 4. Appends the current user or tool-response message to the session when it passes the
@@ -146,6 +147,24 @@ String response = client.prompt()
 `EventFilter.merge()` semantics: every non-null field from the request filter replaces
 the corresponding field from the advisor default; `excludeSynthetic` is OR-ed so either
 side can opt in. A `null` value for `EVENT_FILTER_CONTEXT_KEY` is ignored.
+
+---
+
+## Filtering retrieved context
+
+Use `contextFilter(...)` when you want to keep a message in storage but avoid replaying
+it into the prompt. This is especially useful for large tool responses or other transient
+payloads that are expensive to send back to the model on every turn.
+
+```java
+SessionMemoryAdvisor advisor = SessionMemoryAdvisor.builder(sessionService)
+    .contextFilter(SessionContextFilter.excludeToolMessages())
+    .build();
+```
+
+The default builder filter is `SessionContextFilter.includeAll()`. If you want to make
+the no-op baseline explicit, start from `includeAll()` and compose additional predicates
+with `and(...)`.
 
 ---
 

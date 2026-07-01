@@ -41,6 +41,7 @@ import org.springframework.ai.session.CreateSessionRequest;
 import org.springframework.ai.session.EventFilter;
 import org.springframework.ai.session.Session;
 import org.springframework.ai.session.SessionEvent;
+import org.springframework.ai.session.SessionContextFilter;
 import org.springframework.ai.session.SessionMessageFilter;
 import org.springframework.ai.session.SessionService;
 import org.springframework.ai.session.compaction.CompactionStrategy;
@@ -55,7 +56,8 @@ import org.springframework.util.Assert;
  * <p>
  * On each interaction:
  * <ol>
- * <li>Retrieves the session's event history and prepends it to the prompt messages.</li>
+ * <li>Retrieves the session's event history, applies the configured
+ * {@link SessionContextFilter}, and prepends the remaining messages to the prompt.</li>
  * <li>Appends the current user or tool-response message to the session when it passes the
  * configured {@link SessionMessageFilter}.</li>
  * <li>After the model responds, appends assistant messages that pass the configured
@@ -109,6 +111,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	private final EventFilter eventFilter;
 
+	private final SessionContextFilter contextFilter;
+
 	private final SessionMessageFilter messageFilter;
 
 	@Nullable private final CompactionTrigger compactionTrigger;
@@ -116,13 +120,14 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 	@Nullable private final CompactionStrategy compactionStrategy;
 
 	private SessionMemoryAdvisor(SessionService sessionService, String defaultUserId, int order, Scheduler scheduler,
-			EventFilter eventFilter, SessionMessageFilter messageFilter, @Nullable CompactionTrigger compactionTrigger,
-			@Nullable CompactionStrategy compactionStrategy) {
+			EventFilter eventFilter, SessionContextFilter contextFilter, SessionMessageFilter messageFilter,
+			@Nullable CompactionTrigger compactionTrigger, @Nullable CompactionStrategy compactionStrategy) {
 		this.sessionService = sessionService;
 		this.defaultUserId = defaultUserId;
 		this.order = order;
 		this.scheduler = scheduler;
 		this.eventFilter = eventFilter;
+		this.contextFilter = contextFilter;
 		this.messageFilter = messageFilter;
 		this.compactionTrigger = compactionTrigger;
 		this.compactionStrategy = compactionStrategy;
@@ -140,23 +145,24 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 	@Override
 	public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
+		Map<String, @Nullable Object> context = request.context();
 
 		// 0. Resolve the session ID — must be present in the request context.
-		String sessionId = getSessionId(request.context());
+		String sessionId = getSessionId(context);
 
 		// 1. Find or create the session. The Session object is cached in the request
 		// context so that after() can reuse it and skip a redundant findById()
 		// repository round-trip when compaction is configured.
 		Session session = this.sessionService.findById(sessionId);
 		if (session == null) {
-			String userId = getUserId(request.context());
+			String userId = getUserId(context);
 			session = this.sessionService.create(CreateSessionRequest.builder().id(sessionId).userId(userId).build());
 		}
 		else {
 			// Enforce ownership when the caller explicitly identifies a user via
 			// USER_ID_CONTEXT_KEY. Skipped when no per-request user ID is set so that
 			// callers that rely solely on defaultUserId are not broken.
-			Object userIdValue = request.context().get(USER_ID_CONTEXT_KEY);
+			Object userIdValue = context.get(USER_ID_CONTEXT_KEY);
 			if (userIdValue instanceof String requestUserId && !requestUserId.isBlank()
 					&& !requestUserId.equals(session.userId())) {
 				throw new IllegalStateException(
@@ -164,14 +170,15 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 			}
 		}
 
-		// 2. Retrieve history applying the configured filter (default: all events)
+		// 2. Retrieve history applying the configured event and context filters
+		// (default: all events / include all retrieved messages)
 
 		// If the request context contains an EventFilter, merge it with the advisor's
 		// configured filter so that request-level parameters override the advisor
 		// defaults
 		EventFilter eventFilter = this.eventFilter;
-		if (request.context().containsKey(EVENT_FILTER_CONTEXT_KEY)) {
-			EventFilter requestEventFilter = (EventFilter) request.context().get(EVENT_FILTER_CONTEXT_KEY);
+		if (context.containsKey(EVENT_FILTER_CONTEXT_KEY)) {
+			EventFilter requestEventFilter = (EventFilter) context.get(EVENT_FILTER_CONTEXT_KEY);
 			if (requestEventFilter != null) {
 				eventFilter = this.eventFilter.merge(requestEventFilter);
 			}
@@ -183,7 +190,9 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		eventFilter = eventFilter.merge(EventFilter.active());
 
 		List<SessionEvent> events = this.sessionService.getEvents(sessionId, eventFilter);
-		List<Message> history = events.stream().map(SessionEvent::getMessage).toList();
+		List<Message> history = events.stream().map(SessionEvent::getMessage)
+			.filter(message -> shouldIncludeInPrompt(message, context, sessionId))
+			.toList();
 
 		List<Message> combined = new ArrayList<>(history);
 		combined.addAll(request.prompt().getInstructions());
@@ -201,7 +210,7 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 
 		// 4. Append the current user or tool-response message to the session
 		Message userMessage = request.prompt().getLastUserOrToolResponseMessage();
-		if (userMessage != null && shouldPersist(userMessage, request.context(), sessionId)) {
+		if (userMessage != null && shouldPersist(userMessage, context, sessionId)) {
 			this.sessionService.appendMessage(sessionId, userMessage);
 		}
 
@@ -271,6 +280,15 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		return keep;
 	}
 
+	private boolean shouldIncludeInPrompt(Message message, Map<String, @Nullable Object> context, String sessionId) {
+		boolean keep = this.contextFilter.matches(message, context);
+		if (!keep) {
+			logger.debug("Skipping {} message for session [{}] due to context filter", message.getMessageType(),
+					sessionId);
+		}
+		return keep;
+	}
+
 	public static Builder builder(SessionService sessionService) {
 		return new Builder(sessionService);
 	}
@@ -289,6 +307,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
 
 		private EventFilter eventFilter = EventFilter.all();
+
+		private SessionContextFilter contextFilter = SessionContextFilter.includeAll();
 
 		private SessionMessageFilter messageFilter = SessionMessageFilter.excludeEmptyAssistantMessages();
 
@@ -334,6 +354,27 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 		}
 
 		/**
+		 * Filter applied when loading session history into the prompt. Defaults to
+		 * {@link SessionContextFilter#includeAll()} so existing applications continue to
+		 * replay the full retrieved history.
+		 * <p>
+		 * Compose filters with {@link SessionContextFilter#and(SessionContextFilter)} when
+		 * you want to preserve the default behavior and add your own rules, for example to
+		 * skip tool responses from the prompt while still keeping them stored:
+		 * <pre>{@code
+		 * SessionMemoryAdvisor.builder(sessionService)
+		 *     .contextFilter(SessionContextFilter.includeAll()
+		 *         .and(SessionContextFilter.excludeToolMessages()))
+		 *     .build();
+		 * }</pre>
+		 */
+		public Builder contextFilter(SessionContextFilter contextFilter) {
+			Assert.notNull(contextFilter, "contextFilter must not be null");
+			this.contextFilter = contextFilter;
+			return this;
+		}
+
+		/**
 		 * Filter applied when appending messages to session memory. Defaults to
 		 * {@link SessionMessageFilter#excludeEmptyAssistantMessages()} so the Bedrock-safe
 		 * empty assistant suppression from #19 remains in place.
@@ -370,7 +411,8 @@ public final class SessionMemoryAdvisor implements BaseAdvisor, MemoryAdvisor {
 						"compactionTrigger and compactionStrategy must be set together — set both or neither");
 			}
 			return new SessionMemoryAdvisor(this.sessionService, this.defaultUserId, this.order, this.scheduler,
-					this.eventFilter, this.messageFilter, this.compactionTrigger, this.compactionStrategy);
+					this.eventFilter, this.contextFilter, this.messageFilter, this.compactionTrigger,
+					this.compactionStrategy);
 		}
 
 	}
